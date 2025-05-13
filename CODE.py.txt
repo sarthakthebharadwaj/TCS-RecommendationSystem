@@ -1,0 +1,112 @@
+from flask import Flask, request , json
+
+from flipkart_rec import Recommendation
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+import string
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem.wordnet import WordNetLemmatizer
+
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.metrics.pairwise import linear_kernel, cosine_similarity
+
+app = Flask(__name__)
+
+#@app.route('/recommend/', methods=['GET', 'POST'])
+#def recommend():
+#    productName = request.args.get('product')
+#    getData(productName)
+#    #recommend = Recommendation.GetData(productName)
+#    return recommend
+
+@app.route('/recommend/', methods=['GET', 'POST'])
+def getData():
+    user_input = request.args.get('product')
+    pre_df=pd.read_csv("E:\\TCS internship related\\recommendation_system\\Dataset\\flipkart_data.csv"
+        na_values=["No rating available"])
+    default_input = "FabHomeDecor Fabric Double Sofa Bed"
+
+    if user_input not in pre_df.values: 
+        user_input = default_input[:]
+ 
+    print( user_input )
+    #print(pre_df.head())
+    #pre_df.info()
+    
+    pre_df['product_category_tree']=pre_df['product_category_tree'].map(lambda x:x.strip('[]'))
+    pre_df['product_category_tree']=pre_df['product_category_tree'].map(lambda x:x.strip('"'))
+    pre_df['product_category_tree']=pre_df['product_category_tree'].map(lambda x:x.split('>>'))
+
+    
+    del_list=['crawl_timestamp', 'product_url','image',"retail_price","discounted_price",
+    "is_FK_Advantage_product","product_rating","overall_rating","product_specifications"]
+    pre_df=pre_df.drop(del_list,axis=1)
+
+
+    lem = WordNetLemmatizer()
+    stop_words = set(stopwords.words('english')) 
+    exclude = set(string.punctuation)
+
+    #print(pre_df.head())
+    #print(pre_df.shape)
+
+    smd=pre_df.copy()
+    smd.drop_duplicates(subset ="product_name", 
+                        keep = "first", inplace = True)
+    #print(smd.shape)
+
+    print("\nRUMMAGING THE STOREROOM PLEASE WAIT!\n")
+
+    def filter_keywords(doc):
+        doc=doc.lower()
+        stop_free = " ".join([i for i in doc.split() if i not in stop_words])
+        punc_free = "".join(ch for ch in stop_free if ch not in exclude)
+        word_tokens = word_tokenize(punc_free)
+        filtered_sentence = [(lem.lemmatize(w)) for w in word_tokens]
+        return filtered_sentence
+
+    #applying the filter   
+    smd['product'] = smd['product_name'].apply(filter_keywords)
+    smd['description'] = smd['description'].astype("str").apply(filter_keywords)
+    smd['brand'] = smd['brand'].astype("str").apply(filter_keywords)
+
+    smd["all_meta"]=smd['product']+smd['brand']+ pre_df['product_category_tree']+smd['description']
+    smd["all_meta"] = smd["all_meta"].apply(lambda x: ' '.join(x))
+
+    #print(smd["all_meta"].head())
+
+    tf = TfidfVectorizer(ngram_range=(1, 2),min_df=0, stop_words='english')
+    tfidf_matrix = tf.fit_transform(smd['all_meta'])
+
+    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+
+    def get_recommendations(title):
+        idx = indices[title]
+        sim_scores = list(enumerate(cosine_sim[idx]))
+        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+        sim_scores = sim_scores[1:51]#1:31
+        product_indices = [i[0] for i in sim_scores]
+        return titles.iloc[product_indices]
+
+    smd = smd.reset_index() 
+    titles = smd['product_name']
+    indices = pd.Series(smd.index, index=smd['product_name'])
+
+    #print(get_recommendations(user_input).head(50))
+    result = get_recommendations(user_input).head(50)
+    #print(result["product_name"].tolist())
+    #print(json.jsonify(result.to_json()))
+    #print(type(result))
+    response = app.response_class(
+        response=json.dumps(result.to_json()),
+        status=200,
+        mimetype='application/json'
+    )
+    return response
+if __name__ == '__main__':
+    app.run(host='127.0.0.1', port=105)
